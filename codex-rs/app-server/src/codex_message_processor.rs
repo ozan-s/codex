@@ -3125,10 +3125,12 @@ impl CodexMessageProcessor {
         let mapped_items: Vec<CoreInputItem> = items
             .into_iter()
             .map(|item| match item {
-                WireInputItem::Text { text } => CoreInputItem::Text {
+                WireInputItem::Text {
                     text,
-                    // TODO: Thread text element ranges into v1 input handling.
-                    text_elements: Vec::new(),
+                    text_elements,
+                } => CoreInputItem::Text {
+                    text,
+                    text_elements,
                 },
                 WireInputItem::Image { image_url } => CoreInputItem::Image { image_url },
                 WireInputItem::LocalImage { path } => CoreInputItem::LocalImage { path },
@@ -3175,10 +3177,12 @@ impl CodexMessageProcessor {
         let mapped_items: Vec<CoreInputItem> = items
             .into_iter()
             .map(|item| match item {
-                WireInputItem::Text { text } => CoreInputItem::Text {
+                WireInputItem::Text {
                     text,
-                    // TODO: Thread text element ranges into v1 input handling.
-                    text_elements: Vec::new(),
+                    text_elements,
+                } => CoreInputItem::Text {
+                    text,
+                    text_elements,
                 },
                 WireInputItem::Image { image_url } => CoreInputItem::Image { image_url },
                 WireInputItem::LocalImage { path } => CoreInputItem::LocalImage { path },
