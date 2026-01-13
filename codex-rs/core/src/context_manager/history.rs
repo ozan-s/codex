@@ -142,8 +142,6 @@ impl ContextManager {
                     if matches!(item, ContentItem::InputImage { .. }) {
                         *item = ContentItem::InputText {
                             text: placeholder.clone(),
-                            // Placeholder text is synthesized; no UI element ranges to preserve.
-                            text_elements: Vec::new(),
                         };
                         replaced = true;
                     }
