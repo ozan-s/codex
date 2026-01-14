@@ -69,7 +69,7 @@ impl UserMessageItem {
         EventMsg::UserMessage(UserMessageEvent {
             message: self.message(),
             images: Some(self.image_urls()),
-            local_images: self.local_images(),
+            local_images: self.local_image_paths(),
             text_elements: self.text_elements(),
         })
     }
@@ -119,7 +119,7 @@ impl UserMessageItem {
             .collect()
     }
 
-    pub fn local_images(&self) -> Vec<std::path::PathBuf> {
+    pub fn local_image_paths(&self) -> Vec<std::path::PathBuf> {
         self.content
             .iter()
             .filter_map(|c| match c {
