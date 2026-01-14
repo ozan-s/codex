@@ -197,7 +197,12 @@ impl ThreadHistoryBuilder {
         if !payload.message.trim().is_empty() {
             content.push(UserInput::Text {
                 text: payload.message.clone(),
-                text_elements: payload.text_elements.clone(),
+                text_elements: payload
+                    .text_elements
+                    .iter()
+                    .cloned()
+                    .map(Into::into)
+                    .collect(),
             });
         }
         if let Some(images) = &payload.images {
