@@ -248,6 +248,7 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "First turn".into(),
                 images: Some(vec!["https://example.com/one.png".into()]),
+                local_images: Vec::new(),
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
             }),
@@ -263,6 +264,7 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Second turn".into(),
                 images: None,
+                local_images: Vec::new(),
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
             }),
@@ -337,6 +339,7 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Turn start".into(),
                 images: None,
+                local_images: Vec::new(),
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
             }),
@@ -383,6 +386,7 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Please do the thing".into(),
                 images: None,
+                local_images: Vec::new(),
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
             }),
@@ -395,6 +399,7 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Let's try again".into(),
                 images: None,
+                local_images: Vec::new(),
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
             }),
@@ -455,6 +460,7 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "First".into(),
                 images: None,
+                local_images: Vec::new(),
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
             }),
@@ -464,6 +470,7 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Second".into(),
                 images: None,
+                local_images: Vec::new(),
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
             }),
@@ -474,6 +481,7 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Third".into(),
                 images: None,
+                local_images: Vec::new(),
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
             }),
@@ -530,6 +538,7 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "One".into(),
                 images: None,
+                local_images: Vec::new(),
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
             }),
@@ -539,6 +548,7 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Two".into(),
                 images: None,
+                local_images: Vec::new(),
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
             }),
