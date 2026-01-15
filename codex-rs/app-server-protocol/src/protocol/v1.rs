@@ -450,7 +450,7 @@ pub enum InputItem {
         text: String,
         /// UI-defined spans within `text` used to render or persist special elements.
         #[serde(default)]
-        text_elements: Vec<TextElement>,
+        text_elements: Vec<V1TextElement>,
     },
     Image {
         image_url: String,
@@ -462,14 +462,15 @@ pub enum InputItem {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ByteRange {
+#[ts(rename = "ByteRange")]
+pub struct V1ByteRange {
     /// Start byte offset (inclusive) within the UTF-8 text buffer.
     pub start: usize,
     /// End byte offset (exclusive) within the UTF-8 text buffer.
     pub end: usize,
 }
 
-impl From<CoreByteRange> for ByteRange {
+impl From<CoreByteRange> for V1ByteRange {
     fn from(value: CoreByteRange) -> Self {
         Self {
             start: value.start,
@@ -478,8 +479,8 @@ impl From<CoreByteRange> for ByteRange {
     }
 }
 
-impl From<ByteRange> for CoreByteRange {
-    fn from(value: ByteRange) -> Self {
+impl From<V1ByteRange> for CoreByteRange {
+    fn from(value: V1ByteRange) -> Self {
         Self {
             start: value.start,
             end: value.end,
@@ -489,14 +490,15 @@ impl From<ByteRange> for CoreByteRange {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct TextElement {
+#[ts(rename = "TextElement")]
+pub struct V1TextElement {
     /// Byte range in the parent `text` buffer that this element occupies.
-    pub byte_range: ByteRange,
+    pub byte_range: V1ByteRange,
     /// Optional human-readable placeholder for the element, displayed in the UI.
     pub placeholder: Option<String>,
 }
 
-impl From<CoreTextElement> for TextElement {
+impl From<CoreTextElement> for V1TextElement {
     fn from(value: CoreTextElement) -> Self {
         Self {
             byte_range: value.byte_range.into(),
@@ -505,8 +507,8 @@ impl From<CoreTextElement> for TextElement {
     }
 }
 
-impl From<TextElement> for CoreTextElement {
-    fn from(value: TextElement) -> Self {
+impl From<V1TextElement> for CoreTextElement {
+    fn from(value: V1TextElement) -> Self {
         Self {
             byte_range: value.byte_range.into(),
             placeholder: value.placeholder,
