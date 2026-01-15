@@ -509,6 +509,7 @@ async fn resolve_resume_path(
             &config.codex_home,
             1,
             None,
+            codex_core::ThreadSortOrder::UpdatedAtDesc,
             &[],
             Some(default_provider_filter.as_slice()),
             &config.model_provider_id,

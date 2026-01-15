@@ -100,6 +100,7 @@ use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
+use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
@@ -124,6 +125,7 @@ use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
 use codex_core::ThreadManager;
+use codex_core::ThreadSortOrder;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::config::Config;
@@ -1599,6 +1601,7 @@ impl CodexMessageProcessor {
         let ThreadListParams {
             cursor,
             limit,
+            sort_key,
             model_providers,
         } = params;
 
@@ -1606,8 +1609,12 @@ impl CodexMessageProcessor {
             .map(|value| value as usize)
             .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
             .clamp(1, THREAD_LIST_MAX_LIMIT);
+        let sort_order = match sort_key.unwrap_or(ThreadSortKey::CreatedAt) {
+            ThreadSortKey::CreatedAt => ThreadSortOrder::CreatedAtDesc,
+            ThreadSortKey::UpdatedAt => ThreadSortOrder::UpdatedAtDesc,
+        };
         let (summaries, next_cursor) = match self
-            .list_threads_common(requested_page_size, cursor, model_providers)
+            .list_threads_common(requested_page_size, cursor, model_providers, sort_order)
             .await
         {
             Ok(r) => r,
@@ -2172,7 +2179,12 @@ impl CodexMessageProcessor {
             .clamp(1, THREAD_LIST_MAX_LIMIT);
 
         match self
-            .list_threads_common(requested_page_size, cursor, model_providers)
+            .list_threads_common(
+                requested_page_size,
+                cursor,
+                model_providers,
+                ThreadSortOrder::UpdatedAtDesc,
+            )
             .await
         {
             Ok((items, next_cursor)) => {
@@ -2190,6 +2202,7 @@ impl CodexMessageProcessor {
         requested_page_size: usize,
         cursor: Option<String>,
         model_providers: Option<Vec<String>>,
+        sort_order: ThreadSortOrder,
     ) -> Result<(Vec<ConversationSummary>, Option<String>), JSONRPCErrorError> {
         let mut cursor_obj: Option<RolloutCursor> = cursor.as_ref().and_then(|s| parse_cursor(s));
         let mut last_cursor = cursor_obj.clone();
@@ -2215,6 +2228,7 @@ impl CodexMessageProcessor {
                 &self.config.codex_home,
                 page_size,
                 cursor_obj.as_ref(),
+                sort_order,
                 INTERACTIVE_SESSION_SOURCES,
                 model_provider_filter.as_deref(),
                 fallback_provider.as_str(),

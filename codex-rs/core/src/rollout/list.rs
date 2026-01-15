@@ -68,6 +68,12 @@ struct HeadTailSummary {
 const MAX_SCAN_FILES: usize = 10000;
 const HEAD_RECORD_LIMIT: usize = 10;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadSortOrder {
+    CreatedAtDesc,
+    UpdatedAtDesc,
+}
+
 /// Pagination cursor identifying a file by timestamp and UUID.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cursor {
@@ -108,11 +114,13 @@ impl<'de> serde::Deserialize<'de> for Cursor {
 
 /// Retrieve recorded thread file paths with token pagination. The returned `next_cursor`
 /// can be supplied on the next call to resume after the last returned item, resilient to
-/// concurrent new sessions being appended. Ordering is stable by updated-at desc, then UUID desc.
+/// concurrent new sessions being appended. Ordering is stable by the requested sort order
+/// (timestamp desc, then UUID desc).
 pub(crate) async fn get_threads(
     codex_home: &Path,
     page_size: usize,
     cursor: Option<&Cursor>,
+    sort_order: ThreadSortOrder,
     allowed_sources: &[SessionSource],
     model_providers: Option<&[String]>,
     default_provider: &str,
@@ -138,6 +146,7 @@ pub(crate) async fn get_threads(
         root.clone(),
         page_size,
         anchor,
+        sort_order,
         allowed_sources,
         provider_matcher.as_ref(),
     )
@@ -148,8 +157,157 @@ pub(crate) async fn get_threads(
 /// Load thread file paths from disk using directory traversal.
 ///
 /// Directory layout: `~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl`
-/// Returned newest (latest updated) first.
+/// Returned newest (based on sort order) first.
 async fn traverse_directories_for_paths(
+    root: PathBuf,
+    page_size: usize,
+    anchor: Option<Cursor>,
+    sort_order: ThreadSortOrder,
+    allowed_sources: &[SessionSource],
+    provider_matcher: Option<&ProviderMatcher<'_>>,
+) -> io::Result<ThreadsPage> {
+    match sort_order {
+        ThreadSortOrder::CreatedAtDesc => {
+            traverse_directories_for_paths_created(
+                root,
+                page_size,
+                anchor,
+                allowed_sources,
+                provider_matcher,
+            )
+            .await
+        }
+        ThreadSortOrder::UpdatedAtDesc => {
+            traverse_directories_for_paths_updated(
+                root,
+                page_size,
+                anchor,
+                allowed_sources,
+                provider_matcher,
+            )
+            .await
+        }
+    }
+}
+
+async fn traverse_directories_for_paths_created(
+    root: PathBuf,
+    page_size: usize,
+    anchor: Option<Cursor>,
+    allowed_sources: &[SessionSource],
+    provider_matcher: Option<&ProviderMatcher<'_>>,
+) -> io::Result<ThreadsPage> {
+    let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
+    let mut scanned_files = 0usize;
+    let mut anchor_passed = anchor.is_none();
+    let (anchor_ts, anchor_id) = match anchor {
+        Some(c) => (c.ts, c.id),
+        None => (OffsetDateTime::UNIX_EPOCH, Uuid::nil()),
+    };
+    let mut more_matches_available = false;
+
+    let year_dirs = collect_dirs_desc(&root, |s| s.parse::<u16>().ok()).await?;
+
+    'outer: for (_year, year_path) in year_dirs.iter() {
+        if scanned_files >= MAX_SCAN_FILES {
+            break;
+        }
+        let month_dirs = collect_dirs_desc(year_path, |s| s.parse::<u8>().ok()).await?;
+        for (_month, month_path) in month_dirs.iter() {
+            if scanned_files >= MAX_SCAN_FILES {
+                break 'outer;
+            }
+            let day_dirs = collect_dirs_desc(month_path, |s| s.parse::<u8>().ok()).await?;
+            for (_day, day_path) in day_dirs.iter() {
+                if scanned_files >= MAX_SCAN_FILES {
+                    break 'outer;
+                }
+                let mut day_files = collect_files(day_path, |name_str, path| {
+                    if !name_str.starts_with("rollout-") || !name_str.ends_with(".jsonl") {
+                        return None;
+                    }
+
+                    parse_timestamp_uuid_from_filename(name_str)
+                        .map(|(ts, id)| (ts, id, name_str.to_string(), path.to_path_buf()))
+                })
+                .await?;
+                // Stable ordering within the same second: (timestamp desc, uuid desc)
+                day_files.sort_by_key(|(ts, sid, _name_str, _path)| (Reverse(*ts), Reverse(*sid)));
+                for (ts, sid, _name_str, path) in day_files.into_iter() {
+                    scanned_files += 1;
+                    if scanned_files >= MAX_SCAN_FILES && items.len() >= page_size {
+                        more_matches_available = true;
+                        break 'outer;
+                    }
+                    if !anchor_passed {
+                        if ts < anchor_ts || (ts == anchor_ts && sid < anchor_id) {
+                            anchor_passed = true;
+                        } else {
+                            continue;
+                        }
+                    }
+                    if items.len() == page_size {
+                        more_matches_available = true;
+                        break 'outer;
+                    }
+                    // Read head and detect message events; stop once meta + user are found.
+                    let summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
+                        .await
+                        .unwrap_or_default();
+                    if !allowed_sources.is_empty()
+                        && !summary
+                            .source
+                            .is_some_and(|source| allowed_sources.iter().any(|s| s == &source))
+                    {
+                        continue;
+                    }
+                    if let Some(matcher) = provider_matcher
+                        && !matcher.matches(summary.model_provider.as_deref())
+                    {
+                        continue;
+                    }
+                    // Apply filters: must have session meta and at least one user message event
+                    if summary.saw_session_meta && summary.saw_user_event {
+                        let HeadTailSummary {
+                            head,
+                            created_at,
+                            mut updated_at,
+                            ..
+                        } = summary;
+                        if updated_at.is_none() {
+                            updated_at = created_at.clone();
+                        }
+                        items.push(ThreadItem {
+                            path,
+                            head,
+                            created_at,
+                            updated_at,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    let reached_scan_cap = scanned_files >= MAX_SCAN_FILES;
+    if reached_scan_cap && !items.is_empty() {
+        more_matches_available = true;
+    }
+
+    let next = if more_matches_available {
+        build_next_cursor(&items, ThreadSortOrder::CreatedAtDesc)
+    } else {
+        None
+    };
+    Ok(ThreadsPage {
+        items,
+        next_cursor: next,
+        num_scanned_files: scanned_files,
+        reached_scan_cap,
+    })
+}
+
+async fn traverse_directories_for_paths_updated(
     root: PathBuf,
     page_size: usize,
     anchor: Option<Cursor>,
@@ -231,7 +389,7 @@ async fn traverse_directories_for_paths(
     }
 
     let next = if more_matches_available {
-        build_next_cursor(&items)
+        build_next_cursor(&items, ThreadSortOrder::UpdatedAtDesc)
     } else {
         None
     };
@@ -243,9 +401,9 @@ async fn traverse_directories_for_paths(
     })
 }
 
-/// Pagination cursor token format: "<updated_ts>|<uuid>" where `updated_ts` uses
+/// Pagination cursor token format: "<ts>|<uuid>" where `ts` uses
 /// YYYY-MM-DDThh-mm-ss (UTC, second precision).
-/// The cursor orders files by updated-at desc, then UUID desc.
+/// The cursor orders files by the requested sort order (timestamp desc, then UUID desc).
 pub fn parse_cursor(token: &str) -> Option<Cursor> {
     let (file_ts, uuid_str) = token.split_once('|')?;
 
@@ -260,13 +418,18 @@ pub fn parse_cursor(token: &str) -> Option<Cursor> {
     Some(Cursor::new(ts, uuid))
 }
 
-fn build_next_cursor(items: &[ThreadItem]) -> Option<Cursor> {
+fn build_next_cursor(items: &[ThreadItem], sort_order: ThreadSortOrder) -> Option<Cursor> {
     let last = items.last()?;
-    let updated_at = last.updated_at.as_deref()?;
-    let updated_at = OffsetDateTime::parse(updated_at, &Rfc3339).ok()?;
     let file_name = last.path.file_name()?.to_string_lossy();
-    let (_ts, id) = parse_timestamp_uuid_from_filename(&file_name)?;
-    Some(Cursor::new(updated_at, id))
+    let (created_ts, id) = parse_timestamp_uuid_from_filename(&file_name)?;
+    let ts = match sort_order {
+        ThreadSortOrder::CreatedAtDesc => created_ts,
+        ThreadSortOrder::UpdatedAtDesc => {
+            let updated_at = last.updated_at.as_deref()?;
+            OffsetDateTime::parse(updated_at, &Rfc3339).ok()?
+        }
+    };
+    Some(Cursor::new(ts, id))
 }
 
 /// Collects immediate subdirectories of `parent`, parses their (string) names with `parse`,

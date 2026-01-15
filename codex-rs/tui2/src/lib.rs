@@ -15,6 +15,7 @@ use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
+use codex_core::ThreadSortOrder;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -499,6 +500,7 @@ async fn run_ratatui_app(
                 &config.codex_home,
                 1,
                 None,
+                ThreadSortOrder::UpdatedAtDesc,
                 INTERACTIVE_SESSION_SOURCES,
                 Some(provider_filter.as_slice()),
                 &config.model_provider_id,
@@ -548,6 +550,7 @@ async fn run_ratatui_app(
             &config.codex_home,
             1,
             None,
+            ThreadSortOrder::UpdatedAtDesc,
             INTERACTIVE_SESSION_SOURCES,
             Some(provider_filter.as_slice()),
             &config.model_provider_id,

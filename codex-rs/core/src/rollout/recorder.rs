@@ -22,6 +22,7 @@ use tracing::warn;
 
 use super::SESSIONS_SUBDIR;
 use super::list::Cursor;
+use super::list::ThreadSortOrder;
 use super::list::ThreadsPage;
 use super::list::get_threads;
 use super::policy::is_persisted_response_item;
@@ -98,6 +99,7 @@ impl RolloutRecorder {
         codex_home: &Path,
         page_size: usize,
         cursor: Option<&Cursor>,
+        sort_order: ThreadSortOrder,
         allowed_sources: &[SessionSource],
         model_providers: Option<&[String]>,
         default_provider: &str,
@@ -106,6 +108,7 @@ impl RolloutRecorder {
             codex_home,
             page_size,
             cursor,
+            sort_order,
             allowed_sources,
             model_providers,
             default_provider,
