@@ -163,6 +163,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.preview, "Hello");
         assert_eq!(thread.model_provider, "mock_provider");
         assert!(thread.created_at > 0);
+        assert_eq!(thread.updated_at, thread.created_at);
         assert_eq!(thread.cwd, PathBuf::from("/"));
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
@@ -186,6 +187,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.preview, "Hello");
         assert_eq!(thread.model_provider, "mock_provider");
         assert!(thread.created_at > 0);
+        assert_eq!(thread.updated_at, thread.created_at);
         assert_eq!(thread.cwd, PathBuf::from("/"));
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
@@ -236,6 +238,7 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
     assert_eq!(thread.model_provider, "other_provider");
     let expected_ts = chrono::DateTime::parse_from_rfc3339("2025-01-02T11:00:00Z")?.timestamp();
     assert_eq!(thread.created_at, expected_ts);
+    assert_eq!(thread.updated_at, expected_ts);
     assert_eq!(thread.cwd, PathBuf::from("/"));
     assert_eq!(thread.cli_version, "0.0.0");
     assert_eq!(thread.source, SessionSource::Cli);

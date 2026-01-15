@@ -6,6 +6,7 @@ use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
 use chrono::DateTime;
+use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
@@ -2229,6 +2230,7 @@ impl CodexMessageProcessor {
                 .items
                 .into_iter()
                 .filter_map(|it| {
+                    let updated_at = it.updated_at.clone();
                     let session_meta_line = it.head.first().and_then(|first| {
                         serde_json::from_value::<SessionMetaLine>(first.clone()).ok()
                     })?;
@@ -2238,6 +2240,7 @@ impl CodexMessageProcessor {
                         &session_meta_line.meta,
                         session_meta_line.git.as_ref(),
                         fallback_provider.as_str(),
+                        updated_at,
                     )
                 })
                 .collect::<Vec<_>>();
@@ -3958,12 +3961,19 @@ pub(crate) async fn read_summary_from_rollout(
         git,
     } = session_meta_line;
 
+    let created_at = if session_meta.timestamp.is_empty() {
+        None
+    } else {
+        Some(session_meta.timestamp.as_str())
+    };
+    let updated_at = read_updated_at(path, created_at).await;
     if let Some(summary) = extract_conversation_summary(
         path.to_path_buf(),
         &head,
         &session_meta,
         git.as_ref(),
         fallback_provider,
+        updated_at.clone(),
     ) {
         return Ok(summary);
     }
@@ -3978,10 +3988,12 @@ pub(crate) async fn read_summary_from_rollout(
         .clone()
         .unwrap_or_else(|| fallback_provider.to_string());
     let git_info = git.as_ref().map(map_git_info);
+    let updated_at = updated_at.or_else(|| timestamp.clone());
 
     Ok(ConversationSummary {
         conversation_id: session_meta.id,
         timestamp,
+        updated_at,
         path: path.to_path_buf(),
         preview: String::new(),
         model_provider,
@@ -4016,6 +4028,7 @@ fn extract_conversation_summary(
     session_meta: &SessionMeta,
     git: Option<&CoreGitInfo>,
     fallback_provider: &str,
+    updated_at: Option<String>,
 ) -> Option<ConversationSummary> {
     let preview = head
         .iter()
@@ -4041,10 +4054,12 @@ fn extract_conversation_summary(
         .clone()
         .unwrap_or_else(|| fallback_provider.to_string());
     let git_info = git.map(map_git_info);
+    let updated_at = updated_at.or_else(|| timestamp.clone());
 
     Some(ConversationSummary {
         conversation_id,
         timestamp,
+        updated_at,
         path,
         preview: preview.to_string(),
         model_provider,
@@ -4071,12 +4086,25 @@ fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     })
 }
 
+async fn read_updated_at(path: &Path, created_at: Option<&str>) -> Option<String> {
+    let updated_at = tokio::fs::metadata(path)
+        .await
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .map(|modified| {
+            let updated_at: DateTime<Utc> = modified.into();
+            updated_at.to_rfc3339_opts(SecondsFormat::Secs, true)
+        });
+    updated_at.or_else(|| created_at.map(str::to_string))
+}
+
 pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
     let ConversationSummary {
         conversation_id,
         path,
         preview,
         timestamp,
+        updated_at,
         model_provider,
         cwd,
         cli_version,
@@ -4085,6 +4113,7 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
     } = summary;
 
     let created_at = parse_datetime(timestamp.as_deref());
+    let updated_at = parse_datetime(updated_at.as_deref()).or(created_at);
     let git_info = git_info.map(|info| ApiGitInfo {
         sha: info.sha,
         branch: info.branch,
@@ -4096,6 +4125,7 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         preview,
         model_provider,
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
+        updated_at: updated_at.map(|dt| dt.timestamp()).unwrap_or(0),
         path,
         cwd,
         cli_version,
@@ -4150,13 +4180,20 @@ mod tests {
 
         let session_meta = serde_json::from_value::<SessionMeta>(head[0].clone())?;
 
-        let summary =
-            extract_conversation_summary(path.clone(), &head, &session_meta, None, "test-provider")
-                .expect("summary");
+        let summary = extract_conversation_summary(
+            path.clone(),
+            &head,
+            &session_meta,
+            None,
+            "test-provider",
+            timestamp.clone(),
+        )
+        .expect("summary");
 
         let expected = ConversationSummary {
             conversation_id,
-            timestamp,
+            timestamp: timestamp.clone(),
+            updated_at: timestamp,
             path,
             preview: "Count to 5".to_string(),
             model_provider: "test-provider".to_string(),
@@ -4176,6 +4213,7 @@ mod tests {
         use codex_protocol::protocol::RolloutLine;
         use codex_protocol::protocol::SessionMetaLine;
         use std::fs;
+        use std::fs::FileTimes;
 
         let temp_dir = TempDir::new()?;
         let path = temp_dir.path().join("rollout.jsonl");
@@ -4199,12 +4237,19 @@ mod tests {
         };
 
         fs::write(&path, format!("{}\n", serde_json::to_string(&line)?))?;
+        let parsed = chrono::DateTime::parse_from_rfc3339(&timestamp)?.with_timezone(&Utc);
+        let times = FileTimes::new().set_modified(parsed.into());
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)?
+            .set_times(times)?;
 
         let summary = read_summary_from_rollout(path.as_path(), "fallback").await?;
 
         let expected = ConversationSummary {
             conversation_id,
-            timestamp: Some(timestamp),
+            timestamp: Some(timestamp.clone()),
+            updated_at: Some("2025-09-05T16:53:11Z".to_string()),
             path: path.clone(),
             preview: String::new(),
             model_provider: "fallback".to_string(),

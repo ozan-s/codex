@@ -108,7 +108,7 @@ impl<'de> serde::Deserialize<'de> for Cursor {
 
 /// Retrieve recorded thread file paths with token pagination. The returned `next_cursor`
 /// can be supplied on the next call to resume after the last returned item, resilient to
-/// concurrent new sessions being appended. Ordering is stable by timestamp desc, then UUID desc.
+/// concurrent new sessions being appended. Ordering is stable by updated-at desc, then UUID desc.
 pub(crate) async fn get_threads(
     codex_home: &Path,
     page_size: usize,
@@ -148,7 +148,7 @@ pub(crate) async fn get_threads(
 /// Load thread file paths from disk using directory traversal.
 ///
 /// Directory layout: `~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl`
-/// Returned newest (latest) first.
+/// Returned newest (latest updated) first.
 async fn traverse_directories_for_paths(
     root: PathBuf,
     page_size: usize,
@@ -165,89 +165,63 @@ async fn traverse_directories_for_paths(
     };
     let mut more_matches_available = false;
 
-    let year_dirs = collect_dirs_desc(&root, |s| s.parse::<u16>().ok()).await?;
+    let candidates = collect_thread_candidates(&root, &mut scanned_files).await?;
+    let mut candidates = candidates;
+    candidates.sort_by_key(|candidate| {
+        let ts = candidate.updated_at.unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        (Reverse(ts), Reverse(candidate.id))
+    });
 
-    'outer: for (_year, year_path) in year_dirs.iter() {
-        if scanned_files >= MAX_SCAN_FILES {
+    for candidate in candidates.into_iter() {
+        if !anchor_passed {
+            let ts = candidate.updated_at.unwrap_or(OffsetDateTime::UNIX_EPOCH);
+            if ts < anchor_ts || (ts == anchor_ts && candidate.id < anchor_id) {
+                anchor_passed = true;
+            } else {
+                continue;
+            }
+        }
+        if items.len() == page_size {
+            more_matches_available = true;
             break;
         }
-        let month_dirs = collect_dirs_desc(year_path, |s| s.parse::<u8>().ok()).await?;
-        for (_month, month_path) in month_dirs.iter() {
-            if scanned_files >= MAX_SCAN_FILES {
-                break 'outer;
-            }
-            let day_dirs = collect_dirs_desc(month_path, |s| s.parse::<u8>().ok()).await?;
-            for (_day, day_path) in day_dirs.iter() {
-                if scanned_files >= MAX_SCAN_FILES {
-                    break 'outer;
-                }
-                let mut day_files = collect_files(day_path, |name_str, path| {
-                    if !name_str.starts_with("rollout-") || !name_str.ends_with(".jsonl") {
-                        return None;
-                    }
 
-                    parse_timestamp_uuid_from_filename(name_str)
-                        .map(|(ts, id)| (ts, id, name_str.to_string(), path.to_path_buf()))
-                })
-                .await?;
-                // Stable ordering within the same second: (timestamp desc, uuid desc)
-                day_files.sort_by_key(|(ts, sid, _name_str, _path)| (Reverse(*ts), Reverse(*sid)));
-                for (ts, sid, _name_str, path) in day_files.into_iter() {
-                    scanned_files += 1;
-                    if scanned_files >= MAX_SCAN_FILES && items.len() >= page_size {
-                        more_matches_available = true;
-                        break 'outer;
-                    }
-                    if !anchor_passed {
-                        if ts < anchor_ts || (ts == anchor_ts && sid < anchor_id) {
-                            anchor_passed = true;
-                        } else {
-                            continue;
-                        }
-                    }
-                    if items.len() == page_size {
-                        more_matches_available = true;
-                        break 'outer;
-                    }
-                    // Read head and detect message events; stop once meta + user are found.
-                    let summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
-                        .await
-                        .unwrap_or_default();
-                    if !allowed_sources.is_empty()
-                        && !summary
-                            .source
-                            .is_some_and(|source| allowed_sources.iter().any(|s| s == &source))
-                    {
-                        continue;
-                    }
-                    if let Some(matcher) = provider_matcher
-                        && !matcher.matches(summary.model_provider.as_deref())
-                    {
-                        continue;
-                    }
-                    // Apply filters: must have session meta and at least one user message event
-                    if summary.saw_session_meta && summary.saw_user_event {
-                        let HeadTailSummary {
-                            head,
-                            created_at,
-                            mut updated_at,
-                            ..
-                        } = summary;
-                        if updated_at.is_none() {
-                            updated_at = file_modified_rfc3339(&path)
-                                .await
-                                .unwrap_or(None)
-                                .or_else(|| created_at.clone());
-                        }
-                        items.push(ThreadItem {
-                            path,
-                            head,
-                            created_at,
-                            updated_at,
-                        });
-                    }
-                }
+        // Read head and detect message events; stop once meta + user are found.
+        let summary = read_head_summary(&candidate.path, HEAD_RECORD_LIMIT)
+            .await
+            .unwrap_or_default();
+        if !allowed_sources.is_empty()
+            && !summary
+                .source
+                .is_some_and(|source| allowed_sources.iter().any(|s| s == &source))
+        {
+            continue;
+        }
+        if let Some(matcher) = provider_matcher
+            && !matcher.matches(summary.model_provider.as_deref())
+        {
+            continue;
+        }
+        // Apply filters: must have session meta and at least one user message event
+        if summary.saw_session_meta && summary.saw_user_event {
+            let HeadTailSummary {
+                head,
+                created_at,
+                mut updated_at,
+                ..
+            } = summary;
+            if updated_at.is_none() {
+                updated_at = candidate
+                    .updated_at
+                    .and_then(format_rfc3339)
+                    .or_else(|| created_at.clone());
             }
+            items.push(ThreadItem {
+                path: candidate.path,
+                head,
+                created_at,
+                updated_at,
+            });
         }
     }
 
@@ -269,9 +243,9 @@ async fn traverse_directories_for_paths(
     })
 }
 
-/// Pagination cursor token format: "<file_ts>|<uuid>" where `file_ts` matches the
-/// filename timestamp portion (YYYY-MM-DDThh-mm-ss) used in rollout filenames.
-/// The cursor orders files by timestamp desc, then UUID desc.
+/// Pagination cursor token format: "<updated_ts>|<uuid>" where `updated_ts` uses
+/// YYYY-MM-DDThh-mm-ss (UTC, second precision).
+/// The cursor orders files by updated-at desc, then UUID desc.
 pub fn parse_cursor(token: &str) -> Option<Cursor> {
     let (file_ts, uuid_str) = token.split_once('|')?;
 
@@ -288,9 +262,11 @@ pub fn parse_cursor(token: &str) -> Option<Cursor> {
 
 fn build_next_cursor(items: &[ThreadItem]) -> Option<Cursor> {
     let last = items.last()?;
+    let updated_at = last.updated_at.as_deref()?;
+    let updated_at = OffsetDateTime::parse(updated_at, &Rfc3339).ok()?;
     let file_name = last.path.file_name()?.to_string_lossy();
-    let (ts, id) = parse_timestamp_uuid_from_filename(&file_name)?;
-    Some(Cursor::new(ts, id))
+    let (_ts, id) = parse_timestamp_uuid_from_filename(&file_name)?;
+    Some(Cursor::new(updated_at, id))
 }
 
 /// Collects immediate subdirectories of `parent`, parses their (string) names with `parse`,
@@ -355,6 +331,62 @@ fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uui
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
     let ts = PrimitiveDateTime::parse(ts_str, format).ok()?.assume_utc();
     Some((ts, uuid))
+}
+
+struct ThreadCandidate {
+    path: PathBuf,
+    id: Uuid,
+    updated_at: Option<OffsetDateTime>,
+}
+
+async fn collect_thread_candidates(
+    root: &Path,
+    scanned_files: &mut usize,
+) -> io::Result<Vec<ThreadCandidate>> {
+    let mut candidates = Vec::new();
+    let year_dirs = collect_dirs_desc(root, |s| s.parse::<u16>().ok()).await?;
+
+    'outer: for (_year, year_path) in year_dirs.iter() {
+        if *scanned_files >= MAX_SCAN_FILES {
+            break;
+        }
+        let month_dirs = collect_dirs_desc(year_path, |s| s.parse::<u8>().ok()).await?;
+        for (_month, month_path) in month_dirs.iter() {
+            if *scanned_files >= MAX_SCAN_FILES {
+                break 'outer;
+            }
+            let day_dirs = collect_dirs_desc(month_path, |s| s.parse::<u8>().ok()).await?;
+            for (_day, day_path) in day_dirs.iter() {
+                if *scanned_files >= MAX_SCAN_FILES {
+                    break 'outer;
+                }
+                let day_files = collect_files(day_path, |name_str, path| {
+                    if !name_str.starts_with("rollout-") || !name_str.ends_with(".jsonl") {
+                        return None;
+                    }
+
+                    let (_ts, id) = parse_timestamp_uuid_from_filename(name_str)?;
+                    Some((id, path.to_path_buf()))
+                })
+                .await?;
+
+                for (id, path) in day_files.into_iter() {
+                    *scanned_files += 1;
+                    if *scanned_files > MAX_SCAN_FILES {
+                        break 'outer;
+                    }
+                    let updated_at = file_modified_time(&path).await.unwrap_or(None);
+                    candidates.push(ThreadCandidate {
+                        path,
+                        id,
+                        updated_at,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(candidates)
 }
 
 struct ProviderMatcher<'a> {
@@ -452,14 +484,22 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
     Ok(summary.head)
 }
 
-async fn file_modified_rfc3339(path: &Path) -> io::Result<Option<String>> {
+async fn file_modified_time(path: &Path) -> io::Result<Option<OffsetDateTime>> {
     let meta = tokio::fs::metadata(path).await?;
     let modified = meta.modified().ok();
     let Some(modified) = modified else {
         return Ok(None);
     };
     let dt = OffsetDateTime::from(modified);
-    Ok(dt.format(&Rfc3339).ok())
+    Ok(truncate_to_seconds(dt))
+}
+
+fn format_rfc3339(dt: OffsetDateTime) -> Option<String> {
+    dt.format(&Rfc3339).ok()
+}
+
+fn truncate_to_seconds(dt: OffsetDateTime) -> Option<OffsetDateTime> {
+    dt.replace_nanosecond(0).ok()
 }
 
 /// Locate a recorded thread rollout file by its UUID string using the existing
