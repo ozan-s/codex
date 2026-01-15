@@ -16,7 +16,8 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnAbortReason;
-use codex_protocol::user_input::TextElement;
+use codex_protocol::user_input::ByteRange as CoreByteRange;
+use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -448,7 +449,7 @@ pub enum InputItem {
     Text {
         text: String,
         /// UI-defined spans within `text` used to render or persist special elements.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(default)]
         text_elements: Vec<TextElement>,
     },
     Image {
@@ -457,6 +458,60 @@ pub enum InputItem {
     LocalImage {
         path: PathBuf,
     },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ByteRange {
+    /// Start byte offset (inclusive) within the UTF-8 text buffer.
+    pub start: usize,
+    /// End byte offset (exclusive) within the UTF-8 text buffer.
+    pub end: usize,
+}
+
+impl From<CoreByteRange> for ByteRange {
+    fn from(value: CoreByteRange) -> Self {
+        Self {
+            start: value.start,
+            end: value.end,
+        }
+    }
+}
+
+impl From<ByteRange> for CoreByteRange {
+    fn from(value: ByteRange) -> Self {
+        Self {
+            start: value.start,
+            end: value.end,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TextElement {
+    /// Byte range in the parent `text` buffer that this element occupies.
+    pub byte_range: ByteRange,
+    /// Optional human-readable placeholder for the element, displayed in the UI.
+    pub placeholder: Option<String>,
+}
+
+impl From<CoreTextElement> for TextElement {
+    fn from(value: CoreTextElement) -> Self {
+        Self {
+            byte_range: value.byte_range.into(),
+            placeholder: value.placeholder,
+        }
+    }
+}
+
+impl From<TextElement> for CoreTextElement {
+    fn from(value: TextElement) -> Self {
+        Self {
+            byte_range: value.byte_range.into(),
+            placeholder: value.placeholder,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

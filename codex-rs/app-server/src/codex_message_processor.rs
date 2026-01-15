@@ -3130,7 +3130,7 @@ impl CodexMessageProcessor {
                     text_elements,
                 } => CoreInputItem::Text {
                     text,
-                    text_elements,
+                    text_elements: text_elements.into_iter().map(Into::into).collect(),
                 },
                 WireInputItem::Image { image_url } => CoreInputItem::Image { image_url },
                 WireInputItem::LocalImage { path } => CoreInputItem::LocalImage { path },
@@ -3182,7 +3182,7 @@ impl CodexMessageProcessor {
                     text_elements,
                 } => CoreInputItem::Text {
                     text,
-                    text_elements,
+                    text_elements: text_elements.into_iter().map(Into::into).collect(),
                 },
                 WireInputItem::Image { image_url } => CoreInputItem::Image { image_url },
                 WireInputItem::LocalImage { path } => CoreInputItem::LocalImage { path },
